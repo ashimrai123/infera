@@ -1,6 +1,6 @@
-// Package router wires up the HTTP handlers that expose the unified
-// /v1/chat/completions endpoint, resolving each request to a Provider
-// via the registry and handling both streaming and non-streaming paths.
+﻿// Package router wires up the HTTP handlers that expose the unified
+// /v1/chat/completions endpoint, resolving each request to an ordered
+// list of Providers via the registry and attempting failover on error.
 package router
 
 import (
@@ -50,66 +50,83 @@ func (r *Router) handleChatCompletions(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	p, err := r.registry.Resolve(chatReq.Model)
+	providers, err := r.registry.Resolve(chatReq.Model)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 
-	r.logger.Info("routing request", "model", chatReq.Model, "provider", p.Name(), "stream", chatReq.Stream)
-
+	// Try each provider in order. On failure, log and move to the next.
+	// Only return 502 when every provider in the list has been exhausted.
 	if chatReq.Stream {
-		r.handleStream(w, req, p, &chatReq)
-		return
+		r.handleStream(w, req, providers, &chatReq)
+	} else {
+		r.handleComplete(w, req, providers, &chatReq)
 	}
-	r.handleComplete(w, req, p, &chatReq)
 }
 
-func (r *Router) handleComplete(w http.ResponseWriter, req *http.Request, p provider.Provider, chatReq *models.ChatRequest) {
-	resp, err := p.Complete(req.Context(), chatReq)
-	if err != nil {
-		r.logger.Error("provider completion failed", "provider", p.Name(), "error", err)
-		writeError(w, http.StatusBadGateway, err)
+func (r *Router) handleComplete(w http.ResponseWriter, req *http.Request, providers []provider.Provider, chatReq *models.ChatRequest) {
+	var lastErr error
+	for _, p := range providers {
+		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name())
+		resp, err := p.Complete(req.Context(), chatReq)
+		if err != nil {
+			r.logger.Warn("provider failed, trying next", "provider", p.Name(), "error", err)
+			lastErr = err
+			continue
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	r.logger.Error("all providers failed", "model", chatReq.Model, "last_error", lastErr)
+	writeError(w, http.StatusBadGateway, fmt.Errorf("all providers failed: %w", lastErr))
 }
 
-func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, p provider.Provider, chatReq *models.ChatRequest) {
+func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, providers []provider.Provider, chatReq *models.ChatRequest) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported by response writer"))
 		return
 	}
 
-	chunks, err := p.Stream(req.Context(), chatReq)
-	if err != nil {
-		r.logger.Error("provider stream failed to start", "provider", p.Name(), "error", err)
-		writeError(w, http.StatusBadGateway, err)
+	var lastErr error
+	for _, p := range providers {
+		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name(), "stream", true)
+		chunks, err := p.Stream(req.Context(), chatReq)
+		if err != nil {
+			r.logger.Warn("provider stream failed to start, trying next", "provider", p.Name(), "error", err)
+			lastErr = err
+			continue
+		}
+
+		// Stream started successfully -- commit the response headers now.
+		// After this point we cannot fall back to another provider because
+		// we have already started writing to the client.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
+
+		for chunk := range chunks {
+			if chunk.Err != nil {
+				r.logger.Error("stream error", "provider", p.Name(), "error", chunk.Err)
+				break
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			if chunk.Done {
+				break
+			}
+		}
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-
-	for chunk := range chunks {
-		if chunk.Err != nil {
-			r.logger.Error("stream error", "provider", p.Name(), "error", chunk.Err)
-			break
-		}
-		data, _ := json.Marshal(chunk)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		if chunk.Done {
-			break
-		}
-	}
-	fmt.Fprint(w, "data: [DONE]\n\n")
-	flusher.Flush()
+	r.logger.Error("all providers failed", "model", chatReq.Model, "last_error", lastErr)
+	writeError(w, http.StatusBadGateway, fmt.Errorf("all providers failed: %w", lastErr))
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

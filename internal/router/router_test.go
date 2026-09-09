@@ -166,3 +166,34 @@ func TestChatCompletions_ProviderFailure_Returns502(t *testing.T) {
 		t.Fatalf("expected status 502 when provider fails, got %d", rec.Code)
 	}
 }
+
+func TestChatCompletions_FailoverToSecondProvider_Returns200(t *testing.T) {
+	reg := provider.NewRegistry()
+	// Primary always fails.
+	reg.Register(&stubProvider{name: "primary", failComplete: true})
+	// Fallback succeeds.
+	reg.Register(&stubProvider{name: "fallback", streamChunks: []string{}})
+	// Both registered under the same prefix -- primary first.
+	reg.AddRoute("test-", "primary")
+	reg.AddRoute("test-", "fallback")
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	r := New(reg, logger)
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after failover to fallback provider, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	var resp models.ChatResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if resp.Choices[0].Message.Content != "hello from fallback" {
+		t.Errorf("expected response from fallback provider, got: %q", resp.Choices[0].Message.Content)
+	}
+}

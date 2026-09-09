@@ -1,4 +1,4 @@
-// Package provider defines the abstraction every LLM backend (OpenAI,
+﻿// Package provider defines the abstraction every LLM backend (OpenAI,
 // Anthropic, Ollama, ...) must implement, plus a registry used by the
 // router to pick a provider for an incoming request.
 package provider
@@ -11,7 +11,7 @@ import (
 )
 
 // Provider is the common interface every backend adapter implements.
-// Adding a new LLM backend means writing one of these — nothing else
+// Adding a new LLM backend means writing one of these -- nothing else
 // in the gateway needs to change.
 type Provider interface {
 	// Name is a short identifier, e.g. "openai", "ollama".
@@ -30,55 +30,69 @@ type Provider interface {
 	HealthCheck(ctx context.Context) error
 }
 
-// Registry holds all configured providers and resolves which one should
-// handle a given model name. v1 uses simple prefix-based static routing;
-// v2 adds health-aware failover on top of this.
+// Registry holds all configured providers and resolves which ones should
+// handle a given model name.
+//
+// v1: one provider per route (simple prefix-based static routing).
+// v2: ordered list of providers per route -- the router tries them in
+//
+//	order and falls back to the next on failure.
 type Registry struct {
 	providers map[string]Provider
-	// routes maps a model-name prefix (e.g. "gpt-") to a provider name.
-	routes map[string]string
+	// routes maps a model-name prefix to an ordered list of provider names.
+	// The first entry is the preferred provider; subsequent entries are
+	// fallbacks tried in order when the preferred provider fails.
+	routes map[string][]string
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		providers: make(map[string]Provider),
-		routes:    make(map[string]string),
+		routes:    make(map[string][]string),
 	}
 }
 
-// Register adds a provider under a name (e.g. "openai").
+// Register adds a provider under its name (e.g. "openai").
 func (r *Registry) Register(p Provider) {
 	r.providers[p.Name()] = p
 }
 
-// AddRoute maps a model-name prefix to a provider name.
-// Example: AddRoute("gpt-", "openai"); AddRoute("llama", "ollama").
+// AddRoute appends a provider to the ordered fallback list for a model-name
+// prefix. Call it once for the primary provider, again for each fallback:
+//
+//	registry.AddRoute("claude-", "anthropic")  // primary
+//	registry.AddRoute("claude-", "openai")     // fallback
 func (r *Registry) AddRoute(modelPrefix, providerName string) {
-	r.routes[modelPrefix] = providerName
+	r.routes[modelPrefix] = append(r.routes[modelPrefix], providerName)
 }
 
-// Resolve picks a provider for the given model name using longest
-// prefix match. Returns an error if no route matches.
-func (r *Registry) Resolve(model string) (Provider, error) {
+// Resolve returns the ordered list of providers for the given model name
+// using longest-prefix match. The router tries them in order, falling back
+// on error. Returns an error if no route matches.
+func (r *Registry) Resolve(model string) ([]Provider, error) {
 	var bestPrefix string
-	var bestProvider string
+	var bestNames []string
 
-	for prefix, providerName := range r.routes {
+	for prefix, names := range r.routes {
 		if len(prefix) > len(bestPrefix) && hasPrefix(model, prefix) {
 			bestPrefix = prefix
-			bestProvider = providerName
+			bestNames = names
 		}
 	}
 
-	if bestProvider == "" {
+	if len(bestNames) == 0 {
 		return nil, fmt.Errorf("no route configured for model %q", model)
 	}
 
-	p, ok := r.providers[bestProvider]
-	if !ok {
-		return nil, fmt.Errorf("model %q routes to unknown provider %q", model, bestProvider)
+	out := make([]Provider, 0, len(bestNames))
+	for _, name := range bestNames {
+		p, ok := r.providers[name]
+		if !ok {
+			return nil, fmt.Errorf("model %q routes to unknown provider %q", model, name)
+		}
+		out = append(out, p)
 	}
-	return p, nil
+	return out, nil
 }
 
 func hasPrefix(s, prefix string) bool {
