@@ -1,4 +1,4 @@
-﻿// Package router wires up the HTTP handlers that expose the unified
+// Package router wires up the HTTP handlers that expose the unified
 // /v1/chat/completions endpoint, resolving each request to an ordered
 // list of Providers via the registry and attempting failover on error.
 package router
@@ -11,22 +11,26 @@ import (
 
 	"github.com/ashimrai123/infera/internal/models"
 	"github.com/ashimrai123/infera/internal/provider"
+	"github.com/ashimrai123/infera/internal/usage"
 )
 
 type Router struct {
 	registry *provider.Registry
+	tracker  *usage.Tracker
 	logger   *slog.Logger
 	mux      *http.ServeMux
 }
 
-func New(registry *provider.Registry, logger *slog.Logger) *Router {
+func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logger) *Router {
 	r := &Router{
 		registry: registry,
+		tracker:  tracker,
 		logger:   logger,
 		mux:      http.NewServeMux(),
 	}
 	r.mux.HandleFunc("POST /v1/chat/completions", r.handleChatCompletions)
 	r.mux.HandleFunc("GET /healthz", r.handleHealthz)
+	r.mux.HandleFunc("GET /v1/usage", r.handleUsage)
 	return r
 }
 
@@ -72,9 +76,12 @@ func (r *Router) handleComplete(w http.ResponseWriter, req *http.Request, provid
 		resp, err := p.Complete(req.Context(), chatReq)
 		if err != nil {
 			r.logger.Warn("provider failed, trying next", "provider", p.Name(), "error", err)
+			r.tracker.RecordError(p.Name())
 			lastErr = err
 			continue
 		}
+		r.tracker.RecordRequest(p.Name())
+		r.tracker.RecordTokens(p.Name(), int64(resp.Usage.TotalTokens))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 		return
@@ -96,6 +103,7 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 		chunks, err := p.Stream(req.Context(), chatReq)
 		if err != nil {
 			r.logger.Warn("provider stream failed to start, trying next", "provider", p.Name(), "error", err)
+			r.tracker.RecordError(p.Name())
 			lastErr = err
 			continue
 		}
@@ -108,9 +116,11 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
+		r.tracker.RecordRequest(p.Name())
 		for chunk := range chunks {
 			if chunk.Err != nil {
 				r.logger.Error("stream error", "provider", p.Name(), "error", chunk.Err)
+				r.tracker.RecordError(p.Name())
 				break
 			}
 			data, _ := json.Marshal(chunk)
@@ -127,6 +137,12 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 
 	r.logger.Error("all providers failed", "model", chatReq.Model, "last_error", lastErr)
 	writeError(w, http.StatusBadGateway, fmt.Errorf("all providers failed: %w", lastErr))
+}
+
+// handleUsage returns a JSON snapshot of per-provider counters.
+func (r *Router) handleUsage(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(r.tracker.Snapshot())
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

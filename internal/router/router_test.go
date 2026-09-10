@@ -13,6 +13,7 @@ import (
 
 	"github.com/ashimrai123/infera/internal/models"
 	"github.com/ashimrai123/infera/internal/provider"
+	"github.com/ashimrai123/infera/internal/usage"
 )
 
 // stubProvider lets us test the router's HTTP handling in isolation,
@@ -61,7 +62,7 @@ func newTestRouter() *Router {
 	reg.AddRoute("gpt-", "openai")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(reg, logger)
+	return New(reg, usage.New(), logger)
 }
 
 func TestHealthz_ReturnsOK(t *testing.T) {
@@ -155,7 +156,7 @@ func TestChatCompletions_ProviderFailure_Returns502(t *testing.T) {
 	reg.Register(&stubProvider{name: "openai", failComplete: true})
 	reg.AddRoute("gpt-", "openai")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(reg, logger)
+	r := New(reg, usage.New(), logger)
 
 	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
@@ -178,7 +179,7 @@ func TestChatCompletions_FailoverToSecondProvider_Returns200(t *testing.T) {
 	reg.AddRoute("test-", "fallback")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(reg, logger)
+	r := New(reg, usage.New(), logger)
 
 	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))

@@ -7,8 +7,10 @@ import (
 	"os"
 
 	"github.com/ashimrai123/infera/internal/config"
+	"github.com/ashimrai123/infera/internal/middleware"
 	"github.com/ashimrai123/infera/internal/provider"
 	"github.com/ashimrai123/infera/internal/router"
+	"github.com/ashimrai123/infera/internal/usage"
 )
 
 func main() {
@@ -49,12 +51,17 @@ func main() {
 	registry.AddRoute("qwen", "ollama")
 	logger.Info("provider registered", "provider", "ollama")
 
-	r := router.New(registry, logger)
+	tracker := usage.New()
+	r := router.New(registry, tracker, logger)
+
+	// Wrap the router with per-IP rate limiting (10 req/s, burst 20).
+	handler := middleware.NewRateLimiter(r)
 
 	logger.Info("infera starting", "port", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+	if err := http.ListenAndServe(":"+cfg.Port, handler); err != nil {
 		logger.Error("server exited", "error", err)
 		os.Exit(1)
 	}
 }
+
 
