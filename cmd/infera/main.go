@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/ashimrai123/infera/internal/config"
+	"github.com/ashimrai123/infera/internal/metrics"
 	"github.com/ashimrai123/infera/internal/middleware"
 	"github.com/ashimrai123/infera/internal/provider"
 	"github.com/ashimrai123/infera/internal/router"
@@ -15,6 +16,10 @@ import (
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Register Prometheus metrics before the server starts.
+	// MustRegister panics on duplicate registration, catching mistakes early.
+	metrics.Register()
 
 	cfg, err := config.Load()
 	if err != nil {

@@ -8,7 +8,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/ashimrai123/infera/internal/metrics"
 	"github.com/ashimrai123/infera/internal/models"
 	"github.com/ashimrai123/infera/internal/provider"
 	"github.com/ashimrai123/infera/internal/usage"
@@ -31,6 +35,9 @@ func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logge
 	r.mux.HandleFunc("POST /v1/chat/completions", r.handleChatCompletions)
 	r.mux.HandleFunc("GET /healthz", r.handleHealthz)
 	r.mux.HandleFunc("GET /v1/usage", r.handleUsage)
+	// promhttp.Handler() reads all metrics registered with the default
+	// Prometheus registry and writes them as plain text. That's all /metrics is.
+	r.mux.Handle("GET /metrics", promhttp.Handler())
 	return r
 }
 
@@ -73,15 +80,19 @@ func (r *Router) handleComplete(w http.ResponseWriter, req *http.Request, provid
 	var lastErr error
 	for _, p := range providers {
 		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name())
+		start := time.Now()
 		resp, err := p.Complete(req.Context(), chatReq)
+		metrics.RequestDuration.WithLabelValues(p.Name()).Observe(time.Since(start).Seconds())
 		if err != nil {
 			r.logger.Warn("provider failed, trying next", "provider", p.Name(), "error", err)
 			r.tracker.RecordError(p.Name())
+			metrics.ErrorsTotal.WithLabelValues(p.Name()).Inc()
 			lastErr = err
 			continue
 		}
 		r.tracker.RecordRequest(p.Name())
 		r.tracker.RecordTokens(p.Name(), int64(resp.Usage.TotalTokens))
+		metrics.RequestsTotal.WithLabelValues(p.Name(), chatReq.Model).Inc()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
 		return
@@ -100,10 +111,13 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 	var lastErr error
 	for _, p := range providers {
 		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name(), "stream", true)
+		start := time.Now()
 		chunks, err := p.Stream(req.Context(), chatReq)
+		metrics.RequestDuration.WithLabelValues(p.Name()).Observe(time.Since(start).Seconds())
 		if err != nil {
 			r.logger.Warn("provider stream failed to start, trying next", "provider", p.Name(), "error", err)
 			r.tracker.RecordError(p.Name())
+			metrics.ErrorsTotal.WithLabelValues(p.Name()).Inc()
 			lastErr = err
 			continue
 		}
@@ -117,10 +131,12 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 		w.WriteHeader(http.StatusOK)
 
 		r.tracker.RecordRequest(p.Name())
+		metrics.RequestsTotal.WithLabelValues(p.Name(), chatReq.Model).Inc()
 		for chunk := range chunks {
 			if chunk.Err != nil {
 				r.logger.Error("stream error", "provider", p.Name(), "error", chunk.Err)
 				r.tracker.RecordError(p.Name())
+				metrics.ErrorsTotal.WithLabelValues(p.Name()).Inc()
 				break
 			}
 			data, _ := json.Marshal(chunk)
