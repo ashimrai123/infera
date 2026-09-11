@@ -1,0 +1,54 @@
+# docker-compose.yml -- run infera + Prometheus with a single command:
+#
+#   docker compose up
+#
+# Services:
+#   infera      -- the LLM gateway,  http://localhost:8080
+#   prometheus  -- metrics storage,  http://localhost:9090
+#
+# API keys come from a .env file in the repo root (gitignored).
+# Create it with:
+#   echo OPENAI_API_KEY=sk-...      >> .env
+#   echo ANTHROPIC_API_KEY=sk-ant-... >> .env
+
+services:
+
+  infera:
+    build:
+      context: ..               # repo root (go.mod lives there)
+      dockerfile: deploy/docker/Dockerfile
+    ports:
+      - "8080:8080"             # expose gateway to host
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - PORT=8080
+    restart: unless-stopped
+    # Prometheus scrapes infera over this shared network using the
+    # service name "infera" as the hostname -- no hard-coded IPs needed.
+    networks:
+      - infera-net
+
+  prometheus:
+    image: prom/prometheus:v3.4.0
+    ports:
+      - "9090:9090"             # Prometheus UI + API
+    volumes:
+      # Mount our scrape config into the container.
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Named volume keeps metric history across `docker compose down` restarts.
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"  # keep 7 days of history locally
+    restart: unless-stopped
+    networks:
+      - infera-net
+
+networks:
+  infera-net:
+    driver: bridge
+
+volumes:
+  prometheus-data:   # persists Prometheus TSDB across restarts

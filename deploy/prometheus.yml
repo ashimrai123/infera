@@ -1,0 +1,16 @@
+# Prometheus configuration for local development.
+#
+# Prometheus will call GET http://infera:8080/metrics every 15 seconds
+# and store the returned numbers in its time-series database.
+# "infera" resolves to the infera container because both run in the same
+# Docker Compose network -- no IP address needed.
+
+global:
+  scrape_interval: 15s      # how often to pull /metrics
+  evaluation_interval: 15s  # how often to evaluate alerting rules (none yet)
+
+scrape_configs:
+  - job_name: infera
+    static_configs:
+      - targets:
+          - infera:8080
