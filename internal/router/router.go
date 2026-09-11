@@ -8,14 +8,21 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/ashimrai123/infera/internal/breaker"
 	"github.com/ashimrai123/infera/internal/metrics"
 	"github.com/ashimrai123/infera/internal/models"
 	"github.com/ashimrai123/infera/internal/provider"
 	"github.com/ashimrai123/infera/internal/usage"
+)
+
+const (
+	breakerThreshold = 5               // consecutive failures before opening
+	breakerCooldown  = 30 * time.Second // how long to stay open before probing
 )
 
 type Router struct {
@@ -23,6 +30,9 @@ type Router struct {
 	tracker  *usage.Tracker
 	logger   *slog.Logger
 	mux      *http.ServeMux
+
+	breakerMu sync.Mutex
+	breakers  map[string]*breaker.Breaker // one per provider, keyed by name
 }
 
 func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logger) *Router {
@@ -31,6 +41,7 @@ func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logge
 		tracker:  tracker,
 		logger:   logger,
 		mux:      http.NewServeMux(),
+		breakers: make(map[string]*breaker.Breaker),
 	}
 	r.mux.HandleFunc("POST /v1/chat/completions", r.handleChatCompletions)
 	r.mux.HandleFunc("GET /healthz", r.handleHealthz)
@@ -39,6 +50,19 @@ func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logge
 	// Prometheus registry and writes them as plain text. That's all /metrics is.
 	r.mux.Handle("GET /metrics", promhttp.Handler())
 	return r
+}
+
+// getBreakerFor returns the circuit breaker for a provider, creating it on
+// first access. Lazy init avoids needing the provider list at construction time.
+func (r *Router) getBreakerFor(name string) *breaker.Breaker {
+	r.breakerMu.Lock()
+	defer r.breakerMu.Unlock()
+	if b, ok := r.breakers[name]; ok {
+		return b
+	}
+	b := breaker.New(breakerThreshold, breakerCooldown)
+	r.breakers[name] = b
+	return b
 }
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -79,17 +103,31 @@ func (r *Router) handleChatCompletions(w http.ResponseWriter, req *http.Request)
 func (r *Router) handleComplete(w http.ResponseWriter, req *http.Request, providers []provider.Provider, chatReq *models.ChatRequest) {
 	var lastErr error
 	for _, p := range providers {
+		b := r.getBreakerFor(p.Name())
+
+		// If the breaker is open, skip this provider immediately.
+		// No network call -- instant fallback.
+		if !b.Allow() {
+			r.logger.Warn("circuit breaker open, skipping provider",
+				"provider", p.Name(),
+				"state", b.CurrentState())
+			lastErr = &breaker.ErrOpen{Provider: p.Name(), RetryIn: breakerCooldown}
+			continue
+		}
+
 		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name())
 		start := time.Now()
 		resp, err := p.Complete(req.Context(), chatReq)
 		metrics.RequestDuration.WithLabelValues(p.Name()).Observe(time.Since(start).Seconds())
 		if err != nil {
+			b.RecordFailure()
 			r.logger.Warn("provider failed, trying next", "provider", p.Name(), "error", err)
 			r.tracker.RecordError(p.Name())
 			metrics.ErrorsTotal.WithLabelValues(p.Name()).Inc()
 			lastErr = err
 			continue
 		}
+		b.RecordSuccess()
 		r.tracker.RecordRequest(p.Name())
 		r.tracker.RecordTokens(p.Name(), int64(resp.Usage.TotalTokens))
 		metrics.RequestsTotal.WithLabelValues(p.Name(), chatReq.Model).Inc()
@@ -110,11 +148,22 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 
 	var lastErr error
 	for _, p := range providers {
+		b := r.getBreakerFor(p.Name())
+
+		if !b.Allow() {
+			r.logger.Warn("circuit breaker open, skipping provider",
+				"provider", p.Name(),
+				"state", b.CurrentState())
+			lastErr = &breaker.ErrOpen{Provider: p.Name(), RetryIn: breakerCooldown}
+			continue
+		}
+
 		r.logger.Info("attempting provider", "model", chatReq.Model, "provider", p.Name(), "stream", true)
 		start := time.Now()
 		chunks, err := p.Stream(req.Context(), chatReq)
 		metrics.RequestDuration.WithLabelValues(p.Name()).Observe(time.Since(start).Seconds())
 		if err != nil {
+			b.RecordFailure()
 			r.logger.Warn("provider stream failed to start, trying next", "provider", p.Name(), "error", err)
 			r.tracker.RecordError(p.Name())
 			metrics.ErrorsTotal.WithLabelValues(p.Name()).Inc()
@@ -130,6 +179,7 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
+		b.RecordSuccess()
 		r.tracker.RecordRequest(p.Name())
 		metrics.RequestsTotal.WithLabelValues(p.Name(), chatReq.Model).Inc()
 		for chunk := range chunks {
