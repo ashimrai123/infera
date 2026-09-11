@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>infera</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d1117;
+      --surface:  #161b22;
+      --border:   #30363d;
+      --text:     #e6edf3;
+      --muted:    #8b949e;
+      --accent:   #58a6ff;
+      --green:    #3fb950;
+      --red:      #f85149;
+      --user-bg:  #1f2937;
+      --mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .logo-dot { color: var(--accent); }
+    .header-links { display: flex; gap: 16px; }
+    .header-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12px;
+      transition: color 0.15s;
+    }
+    .header-links a:hover { color: var(--text); }
+
+    /* ── Chat area ── */
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      scroll-behavior: smooth;
+    }
+    #chat::-webkit-scrollbar { width: 6px; }
+    #chat::-webkit-scrollbar-track { background: transparent; }
+    #chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* Empty state */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .empty-state .big { font-size: 32px; }
+    .empty-state p { font-size: 13px; line-height: 1.6; max-width: 360px; }
+    .empty-state code {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+
+    /* Message rows */
+    .msg { display: flex; flex-direction: column; gap: 4px; max-width: 780px; width: 100%; margin: 0 auto; }
+    .msg.user { align-items: flex-end; }
+    .msg.assistant { align-items: flex-start; }
+
+    .bubble {
+      padding: 10px 14px;
+      border-radius: 8px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-width: 88%;
+    }
+    .msg.user .bubble {
+      background: var(--user-bg);
+      border: 1px solid var(--border);
+    }
+    .msg.assistant .bubble {
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    /* Streaming cursor */
+    .cursor {
+      display: inline-block;
+      width: 2px;
+      height: 1em;
+      background: var(--accent);
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      animation: blink 0.8s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* Provider badge */
+    .badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      padding: 0 2px;
+    }
+    .badge .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
+    }
+    .badge .dot.error { background: var(--red); }
+
+    /* ── Input bar ── */
+    .input-bar {
+      border-top: 1px solid var(--border);
+      padding: 14px 20px;
+      background: var(--bg);
+      flex-shrink: 0;
+    }
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+      max-width: 780px;
+      margin: 0 auto;
+    }
+    select {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      outline: none;
+      flex-shrink: 0;
+    }
+    select:focus { border-color: var(--accent); }
+    select option:disabled { color: var(--muted); }
+
+    textarea {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 14px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      resize: none;
+      outline: none;
+      min-height: 40px;
+      max-height: 160px;
+      line-height: 1.5;
+      transition: border-color 0.15s;
+    }
+    textarea:focus { border-color: var(--accent); }
+    textarea::placeholder { color: var(--muted); }
+
+    button#send {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 9px 18px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: opacity 0.15s;
+    }
+    button#send:hover { opacity: 0.85; }
+    button#send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .hint {
+      text-align: center;
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 8px;
+      max-width: 780px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* ── Demo panel ── */
+    .demo-panel {
+      border-top: 1px solid var(--border);
+      padding: 10px 20px;
+      background: var(--surface);
+      flex-shrink: 0;
+      display: none; /* shown only when DEMO_MODE is active */
+    }
+    .demo-panel.visible { display: block; }
+    .demo-inner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 780px;
+      margin: 0 auto;
+      flex-wrap: wrap;
+    }
+    .demo-label {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .demo-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+    .demo-badge .dot {
+      width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    }
+    .dot-closed { background: var(--green); }
+    .dot-open   { background: var(--red); }
+    .dot-half   { background: #e3b341; }
+    .demo-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .demo-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .demo-btn.danger:hover { border-color: var(--red); color: var(--red); }
+    .countdown { font-size: 11px; color: var(--red); min-width: 60px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <span class="logo">infera<span class="logo-dot">.</span></span>
+  <div class="header-links">
+    <a href="/metrics" target="_blank">metrics</a>
+    <a href="/v1/usage" target="_blank">usage</a>
+    <a href="https://github.com/ashimrai123/infera" target="_blank">github</a>
+  </div>
+</header>
+
+<div id="chat">
+  <div class="empty-state" id="empty">
+    <div class="big">⚡</div>
+    <p>
+      <strong>infera</strong> — LLM reverse proxy.<br/>
+      Routes requests across <code>OpenAI</code> and <code>Ollama</code>,<br/>
+      with streaming, failover, and circuit breaking.
+    </p>
+    <p>Type a message to try it.</p>
+  </div>
+</div>
+
+<div class="input-bar">
+  <div class="input-row">
+    <select id="model">
+      <option value="gpt-4o-mini">gpt-4o-mini</option>
+      <option value="gpt-4o">gpt-4o</option>
+      <option value="demo-gpt-4o-mini">demo-gpt-4o-mini ⚡ failover</option>
+      <option value="llama3" disabled>llama3 (local only)</option>
+    </select>
+    <textarea
+      id="input"
+      rows="1"
+      placeholder="Send a message..."
+      autocomplete="off"
+    ></textarea>
+    <button id="send">Send</button>
+  </div>
+  <p class="hint">Streaming · Failover · Circuit breaking — powered by infera</p>
+</div>
+
+<!-- Demo panel: only visible when DEMO_MODE=true (debug endpoints available) -->
+<div class="demo-panel" id="demo-panel">
+  <div class="demo-inner">
+    <span class="demo-label">circuit breakers:</span>
+    <div id="breaker-badges"></div>
+    <button class="demo-btn danger" id="btn-break">⚡ break openai</button>
+    <button class="demo-btn" id="btn-reset">↩ reset openai</button>
+    <span class="countdown" id="countdown"></span>
+  </div>
+</div>
+
+<script>
+  const chatEl   = document.getElementById('chat');
+  const emptyEl  = document.getElementById('empty');
+  const inputEl  = document.getElementById('input');
+  const modelEl  = document.getElementById('model');
+  const sendBtn  = document.getElementById('send');
+
+  // Full conversation history sent on every request (stateless backend).
+  const history = [];
+
+  // Auto-resize textarea
+  inputEl.addEventListener('input', () => {
+    inputEl.style.height = 'auto';
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px';
+  });
+
+  // Send on Enter (Shift+Enter for newline)
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+  sendBtn.addEventListener('click', send);
+
+  function send() {
+    const text = inputEl.value.trim();
+    if (!text || sendBtn.disabled) return;
+
+    // Remove empty state on first message
+    emptyEl.remove();
+
+    // Add user message to history + UI
+    history.push({ role: 'user', content: text });
+    appendMessage('user', text);
+
+    inputEl.value = '';
+    inputEl.style.height = 'auto';
+    sendBtn.disabled = true;
+
+    streamResponse();
+  }
+
+  async function streamResponse() {
+    const model   = modelEl.value;
+    const start   = Date.now();
+
+    // Create an empty assistant bubble with streaming cursor
+    const { msgEl, bubbleEl, badgeEl } = appendMessage('assistant', '');
+    const cursor = document.createElement('span');
+    cursor.className = 'cursor';
+    bubbleEl.appendChild(cursor);
+
+    let fullText = '';
+
+    try {
+      const res = await fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages: history, stream: true }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let   buffer  = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete line
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) continue;
+          const raw = line.slice(5).trim();
+          if (raw === '[DONE]') break;
+
+          let chunk;
+          try { chunk = JSON.parse(raw); } catch { continue; }
+
+          if (chunk.delta) {
+            fullText += chunk.delta;
+            // Replace bubble text content, keep cursor at end
+            bubbleEl.textContent = fullText;
+            bubbleEl.appendChild(cursor);
+            chatEl.scrollTop = chatEl.scrollHeight;
+          }
+        }
+      }
+
+      // Stream complete: remove cursor, show badge
+      cursor.remove();
+      const elapsed = ((Date.now() - start) / 1000).toFixed(2);
+      badgeEl.innerHTML = `
+        <span class="dot"></span>
+        <span>${model} &middot; ${elapsed}s</span>
+      `;
+
+      // Add assistant reply to history
+      history.push({ role: 'assistant', content: fullText });
+
+    } catch (err) {
+      cursor.remove();
+      bubbleEl.textContent = `Error: ${err.message}`;
+      bubbleEl.style.color = 'var(--red)';
+      badgeEl.innerHTML = `<span class="dot error"></span><span>failed</span>`;
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
+  }
+
+  function appendMessage(role, text) {
+    const msgEl    = document.createElement('div');
+    msgEl.className = `msg ${role}`;
+
+    const bubbleEl = document.createElement('div');
+    bubbleEl.className = 'bubble';
+    bubbleEl.textContent = text;
+
+    const badgeEl = document.createElement('div');
+    badgeEl.className = 'badge';
+
+    msgEl.appendChild(bubbleEl);
+    if (role === 'assistant') msgEl.appendChild(badgeEl);
+
+    chatEl.appendChild(msgEl);
+    chatEl.scrollTop = chatEl.scrollHeight;
+
+    return { msgEl, bubbleEl, badgeEl };
+  }
+
+  // ── Demo panel ──────────────────────────────────────────────────────────────
+  // Only activates when DEMO_MODE=true is set on the server (debug endpoints exist).
+
+  const demoPanel    = document.getElementById('demo-panel');
+  const breakerBadges = document.getElementById('breaker-badges');
+  const btnBreak     = document.getElementById('btn-break');
+  const btnReset     = document.getElementById('btn-reset');
+  const countdownEl  = document.getElementById('countdown');
+  let   countdownTimer = null;
+
+  const dotClass = { closed: 'dot-closed', open: 'dot-open', 'half-open': 'dot-half' };
+
+  function renderBadges(states) {
+    breakerBadges.innerHTML = '';
+    for (const [name, state] of Object.entries(states)) {
+      const badge = document.createElement('div');
+      badge.className = 'demo-badge';
+      badge.innerHTML = `
+        <span class="dot ${dotClass[state] || 'dot-closed'}"></span>
+        <span>${name}: ${state}</span>
+      `;
+      breakerBadges.appendChild(badge);
+    }
+  }
+
+  async function pollBreakers() {
+    try {
+      const res = await fetch('/v1/debug/breakers');
+      if (!res.ok) return;
+      const states = await res.json();
+      renderBadges(states);
+    } catch { /* server not in demo mode */ }
+  }
+
+  async function initDemoPanel() {
+    try {
+      const res = await fetch('/v1/debug/breakers');
+      if (!res.ok) return; // not in demo mode, panel stays hidden
+      demoPanel.classList.add('visible');
+      const states = await res.json();
+      renderBadges(states);
+      // Poll every 3 seconds to reflect auto-recovery
+      setInterval(pollBreakers, 3000);
+    } catch { /* server not in demo mode */ }
+  }
+
+  btnBreak.addEventListener('click', async () => {
+    await fetch('/v1/debug/break/openai', { method: 'POST' });
+    await pollBreakers();
+    // Start 30s countdown showing time until auto-recovery
+    clearInterval(countdownTimer);
+    let secs = 30;
+    countdownEl.textContent = `auto-reset in ${secs}s`;
+    countdownTimer = setInterval(() => {
+      secs--;
+      if (secs <= 0) {
+        clearInterval(countdownTimer);
+        countdownEl.textContent = '';
+      } else {
+        countdownEl.textContent = `auto-reset in ${secs}s`;
+      }
+    }, 1000);
+  });
+
+  btnReset.addEventListener('click', async () => {
+    await fetch('/v1/debug/reset/openai', { method: 'POST' });
+    clearInterval(countdownTimer);
+    countdownEl.textContent = '';
+    await pollBreakers();
+  });
+
+  initDemoPanel();
+</script>
+</body>
+</html>

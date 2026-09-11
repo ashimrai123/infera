@@ -62,7 +62,7 @@ func newTestRouter() *Router {
 	reg.AddRoute("gpt-", "openai")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(reg, usage.New(), logger)
+	return New(reg, usage.New(), logger, false)
 }
 
 func TestHealthz_ReturnsOK(t *testing.T) {
@@ -156,7 +156,7 @@ func TestChatCompletions_ProviderFailure_Returns502(t *testing.T) {
 	reg.Register(&stubProvider{name: "openai", failComplete: true})
 	reg.AddRoute("gpt-", "openai")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(reg, usage.New(), logger)
+	r := New(reg, usage.New(), logger, false)
 
 	body := `{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))
@@ -179,7 +179,7 @@ func TestChatCompletions_FailoverToSecondProvider_Returns200(t *testing.T) {
 	reg.AddRoute("test-", "fallback")
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	r := New(reg, usage.New(), logger)
+	r := New(reg, usage.New(), logger, false)
 
 	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(body))

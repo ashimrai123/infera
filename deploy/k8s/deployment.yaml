@@ -35,10 +35,12 @@ spec:
     spec:
       containers:
         - name: infera
-          # For local minikube: build the image locally and use imagePullPolicy: Never
-          # For production: push to a registry (e.g. ghcr.io/ashimrai123/infera:latest)
-          image: ghcr.io/ashimrai123/infera:latest
-          imagePullPolicy: Always
+          # LOCAL DEV (Docker Desktop): use the locally built image.
+          #   docker build -f deploy/docker/Dockerfile -t infera:dev .
+          # PRODUCTION: push to a registry and update this line:
+          #   image: ghcr.io/ashimrai123/infera:latest
+          image: infera:dev
+          imagePullPolicy: Never
           ports:
             - name: http
               containerPort: 8080

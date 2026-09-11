@@ -17,11 +17,12 @@ import (
 	"github.com/ashimrai123/infera/internal/metrics"
 	"github.com/ashimrai123/infera/internal/models"
 	"github.com/ashimrai123/infera/internal/provider"
+	"github.com/ashimrai123/infera/internal/ui"
 	"github.com/ashimrai123/infera/internal/usage"
 )
 
 const (
-	breakerThreshold = 5               // consecutive failures before opening
+	breakerThreshold = 5                // consecutive failures before opening
 	breakerCooldown  = 30 * time.Second // how long to stay open before probing
 )
 
@@ -35,7 +36,7 @@ type Router struct {
 	breakers  map[string]*breaker.Breaker // one per provider, keyed by name
 }
 
-func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logger) *Router {
+func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logger, demoMode bool) *Router {
 	r := &Router{
 		registry: registry,
 		tracker:  tracker,
@@ -49,6 +50,20 @@ func New(registry *provider.Registry, tracker *usage.Tracker, logger *slog.Logge
 	// promhttp.Handler() reads all metrics registered with the default
 	// Prometheus registry and writes them as plain text. That's all /metrics is.
 	r.mux.Handle("GET /metrics", promhttp.Handler())
+	// Catch-all: serve the embedded chat UI. All API routes above take priority
+	// because ServeMux matches the most specific pattern first.
+	r.mux.Handle("/", ui.Handler())
+	if demoMode {
+		r.mux.HandleFunc("GET /v1/debug/breakers", r.handleDebugBreakers)
+		r.mux.HandleFunc("POST /v1/debug/break/{provider}", r.handleDebugBreak)
+		r.mux.HandleFunc("POST /v1/debug/reset/{provider}", r.handleDebugReset)
+		logger.Info("demo mode enabled: debug endpoints active",
+			"endpoints", []string{
+				"GET /v1/debug/breakers",
+				"POST /v1/debug/break/{provider}",
+				"POST /v1/debug/reset/{provider}",
+			})
+	}
 	return r
 }
 
@@ -209,6 +224,51 @@ func (r *Router) handleStream(w http.ResponseWriter, req *http.Request, provider
 func (r *Router) handleUsage(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(r.tracker.Snapshot())
+}
+
+// --- Debug handlers (only registered when demoMode = true) ---
+
+// handleDebugBreakers returns the current state of all known circuit breakers.
+// The UI polls this to display live provider status in the demo panel.
+func (r *Router) handleDebugBreakers(w http.ResponseWriter, req *http.Request) {
+	r.breakerMu.Lock()
+	states := make(map[string]string, len(r.breakers))
+	for name, b := range r.breakers {
+		states[name] = b.CurrentState().String()
+	}
+	r.breakerMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(states)
+}
+
+// handleDebugBreak trips the circuit breaker for the named provider by
+// recording failures equal to the threshold. Used by the demo UI button.
+func (r *Router) handleDebugBreak(w http.ResponseWriter, req *http.Request) {
+	name := req.PathValue("provider")
+	b := r.getBreakerFor(name)
+	for i := 0; i < breakerThreshold; i++ {
+		b.RecordFailure()
+	}
+	r.logger.Info("debug: circuit breaker tripped", "provider", name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"provider": name,
+		"state":    b.CurrentState().String(),
+		"message":  "breaker tripped -- will auto-recover after 30s",
+	})
+}
+
+// handleDebugReset closes the circuit breaker for the named provider.
+func (r *Router) handleDebugReset(w http.ResponseWriter, req *http.Request) {
+	name := req.PathValue("provider")
+	b := r.getBreakerFor(name)
+	b.RecordSuccess()
+	r.logger.Info("debug: circuit breaker reset", "provider", name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"provider": name,
+		"state":    b.CurrentState().String(),
+	})
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

@@ -27,6 +27,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// demoMode enables /v1/debug/* endpoints for the live demo UI.
+	// Set DEMO_MODE=true to activate. Never expose in production without auth.
+	demoMode := os.Getenv("DEMO_MODE") == "true"
+
 	registry := provider.NewRegistry()
 
 	// Register providers only when their credentials are present.
@@ -56,17 +60,30 @@ func main() {
 	registry.AddRoute("qwen", "ollama")
 	logger.Info("provider registered", "provider", "ollama")
 
+	if demoMode {
+		// demo-* routes: FailingProvider is primary, OpenAI is fallback.
+		// This makes the failover path live and visible in the demo UI
+		// without needing to manually break anything.
+		registry.Register(provider.NewFailingProvider())
+		registry.AddRoute("demo-", "demo-failing") // primary: always fails
+		registry.AddRoute("demo-", "openai")       // fallback: handles the request
+		logger.Info("demo provider registered", "route", "demo-*", "fallback", "openai")
+	}
+
 	tracker := usage.New()
-	r := router.New(registry, tracker, logger)
+	r := router.New(registry, tracker, logger, demoMode)
 
-	// Wrap the router with per-IP rate limiting (10 req/s, burst 20).
-	handler := middleware.NewRateLimiter(r)
+	// Layer middleware: CORS first (outermost), then rate limiter.
+	// CORS_ORIGIN is empty by default (same-origin). Set it when the
+	// frontend moves to a separate domain (e.g. Vercel + Koyeb split).
+	corsOrigin := os.Getenv("CORS_ORIGIN")
+	var handler http.Handler = r
+	handler = middleware.NewRateLimiter(handler)
+	handler = middleware.CORS(corsOrigin)(handler)
 
-	logger.Info("infera starting", "port", cfg.Port)
+	logger.Info("infera starting", "port", cfg.Port, "demo_mode", demoMode)
 	if err := http.ListenAndServe(":"+cfg.Port, handler); err != nil {
 		logger.Error("server exited", "error", err)
 		os.Exit(1)
 	}
 }
-
-
