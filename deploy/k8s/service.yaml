@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: infera
+  namespace: infera
+  labels:
+    app: infera
+spec:
+  # ClusterIP: reachable only inside the cluster.
+  # Change to LoadBalancer to get an external IP from your cloud provider,
+  # or use an Ingress controller for TLS termination and path-based routing.
+  type: ClusterIP
+
+  selector:
+    # Routes traffic to any pod with this label -- the Deployment sets it.
+    app: infera
+
+  ports:
+    - name: http
+      port: 80          # the port clients connect to (inside the cluster)
+      targetPort: http  # forwards to the container's "http" named port (8080)
+      protocol: TCP

@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infera
+  namespace: infera
+  labels:
+    app: infera
+spec:
+  # Run 2 replicas so the gateway stays up during rolling updates or
+  # if one pod is evicted. Both pods are stateless so this is safe.
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: infera
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1   # at most 1 pod down during a deploy
+      maxSurge: 1         # at most 1 extra pod spun up during a deploy
+
+  template:
+    metadata:
+      labels:
+        app: infera
+      annotations:
+        # Prometheus auto-discovery: when Prometheus runs inside the same
+        # cluster, it reads these annotations and scrapes /metrics automatically
+        # without needing a static target in prometheus.yml.
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+
+    spec:
+      containers:
+        - name: infera
+          # For local minikube: build the image locally and use imagePullPolicy: Never
+          # For production: push to a registry (e.g. ghcr.io/ashimrai123/infera:latest)
+          image: ghcr.io/ashimrai123/infera:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: PORT
+              value: "8080"
+            # Values are pulled from the Secret -- never hardcoded here.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: infera-keys
+                  key: openai-api-key
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: infera-keys
+                  key: anthropic-api-key
+            - name: OLLAMA_URL
+              value: ""   # leave empty unless you run Ollama in the cluster
+
+          # Liveness probe: if /healthz stops responding, Kubernetes restarts
+          # the pod. This catches deadlocks and other hung states.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+
+          # Readiness probe: Kubernetes only sends traffic to a pod once this
+          # passes. During startup the pod is excluded from the Service until ready.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 2
+
+          resources:
+            requests:
+              cpu:    "100m"   # 0.1 CPU core guaranteed
+              memory: "64Mi"   # 64 MB RAM guaranteed
+            limits:
+              cpu:    "500m"   # 0.5 CPU core maximum
+              memory: "128Mi"  # 128 MB RAM maximum -- OOM kill if exceeded
+
+      # Spread pods across nodes so both replicas don't land on the same machine.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: infera
