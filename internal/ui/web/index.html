@@ -299,10 +299,21 @@
 <div class="input-bar">
   <div class="input-row">
     <select id="model">
-      <option value="gpt-4o-mini">gpt-4o-mini</option>
-      <option value="gpt-4o">gpt-4o</option>
-      <option value="demo-gpt-4o-mini">demo-gpt-4o-mini ⚡ failover</option>
-      <option value="llama3" disabled>llama3 (local only)</option>
+      <optgroup label="Gemini (free)">
+        <option value="gemini-3.6-flash">gemini-3.6-flash</option>
+        <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+        <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+      </optgroup>
+      <optgroup label="OpenAI">
+        <option value="gpt-4o-mini">gpt-4o-mini</option>
+        <option value="gpt-4o">gpt-4o</option>
+      </optgroup>
+      <optgroup label="Demo">
+        <option value="demo-gemini-3.6-flash">demo-gemini-3.6-flash ⚡ failover</option>
+      </optgroup>
+      <optgroup label="Local">
+        <option value="llama3" disabled>llama3 (local only)</option>
+      </optgroup>
     </select>
     <textarea
       id="input"
@@ -320,8 +331,8 @@
   <div class="demo-inner">
     <span class="demo-label">circuit breakers:</span>
     <div id="breaker-badges"></div>
-    <button class="demo-btn danger" id="btn-break">⚡ break openai</button>
-    <button class="demo-btn" id="btn-reset">↩ reset openai</button>
+    <button class="demo-btn danger" id="btn-break">⚡ break gemini</button>
+    <button class="demo-btn" id="btn-reset">↩ reset gemini</button>
     <span class="countdown" id="countdown"></span>
   </div>
 </div>
@@ -512,7 +523,7 @@
   }
 
   btnBreak.addEventListener('click', async () => {
-    await fetch('/v1/debug/break/openai', { method: 'POST' });
+    await fetch('/v1/debug/break/gemini', { method: 'POST' });
     await pollBreakers();
     // Start 30s countdown showing time until auto-recovery
     clearInterval(countdownTimer);
@@ -530,7 +541,7 @@
   });
 
   btnReset.addEventListener('click', async () => {
-    await fetch('/v1/debug/reset/openai', { method: 'POST' });
+    await fetch('/v1/debug/reset/gemini', { method: 'POST' });
     clearInterval(countdownTimer);
     countdownEl.textContent = '';
     await pollBreakers();

@@ -53,6 +53,14 @@ func main() {
 		logger.Warn("ANTHROPIC_API_KEY not set -- anthropic provider disabled")
 	}
 
+	if cfg.GeminiAPIKey != "" {
+		registry.Register(provider.NewGeminiProvider(cfg.GeminiAPIKey))
+		registry.AddRoute("gemini-", "gemini")
+		logger.Info("provider registered", "provider", "gemini")
+	} else {
+		logger.Warn("GEMINI_API_KEY not set -- gemini provider disabled")
+	}
+
 	// Ollama runs locally and needs no API key.
 	registry.Register(provider.NewOllamaProvider(cfg.OllamaURL))
 	registry.AddRoute("llama", "ollama")
@@ -61,13 +69,18 @@ func main() {
 	logger.Info("provider registered", "provider", "ollama")
 
 	if demoMode {
-		// demo-* routes: FailingProvider is primary, OpenAI is fallback.
-		// This makes the failover path live and visible in the demo UI
-		// without needing to manually break anything.
+		// demo-* routes: FailingProvider is primary.
+		// Fallback order: gemini (free) → openai.
+		// Only registers providers that are actually configured.
 		registry.Register(provider.NewFailingProvider())
-		registry.AddRoute("demo-", "demo-failing") // primary: always fails
-		registry.AddRoute("demo-", "openai")       // fallback: handles the request
-		logger.Info("demo provider registered", "route", "demo-*", "fallback", "openai")
+		registry.AddRoute("demo-", "demo-failing")
+		if cfg.GeminiAPIKey != "" {
+			registry.AddRoute("demo-", "gemini")
+		}
+		if cfg.OpenAIAPIKey != "" {
+			registry.AddRoute("demo-", "openai")
+		}
+		logger.Info("demo provider registered", "route", "demo-*")
 	}
 
 	tracker := usage.New()

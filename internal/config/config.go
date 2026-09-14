@@ -11,6 +11,7 @@ type Config struct {
 	Port            string
 	OpenAIAPIKey    string
 	AnthropicAPIKey string
+	GeminiAPIKey    string
 	OllamaURL       string
 }
 
@@ -23,6 +24,7 @@ func Load() (*Config, error) {
 		Port:            getEnv("PORT", "8080"),
 		OpenAIAPIKey:    os.Getenv("OPENAI_API_KEY"),
 		AnthropicAPIKey: os.Getenv("ANTHROPIC_API_KEY"),
+		GeminiAPIKey:    os.Getenv("GEMINI_API_KEY"),
 		OllamaURL:       getEnv("OLLAMA_URL", "http://localhost:11434"),
 	}
 	return cfg, nil

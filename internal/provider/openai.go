@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -13,8 +14,10 @@ import (
 	"github.com/ashimrai123/infera/internal/models"
 )
 
-// OpenAIProvider talks to the OpenAI Chat Completions API.
+// OpenAIProvider talks to any OpenAI-compatible Chat Completions API.
+// Both OpenAI and Google Gemini (via its compatibility layer) use this struct.
 type OpenAIProvider struct {
+	name    string
 	apiKey  string
 	baseURL string
 	client  *http.Client
@@ -22,13 +25,25 @@ type OpenAIProvider struct {
 
 func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{
+		name:    "openai",
 		apiKey:  apiKey,
 		baseURL: "https://api.openai.com/v1",
 		client:  &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-func (p *OpenAIProvider) Name() string { return "openai" }
+// NewGeminiProvider returns a provider that talks to Google's Gemini API
+// using its OpenAI-compatible endpoint. Get a free API key at aistudio.google.com.
+func NewGeminiProvider(apiKey string) *OpenAIProvider {
+	return &OpenAIProvider{
+		name:    "gemini",
+		apiKey:  apiKey,
+		baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+		client:  &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+func (p *OpenAIProvider) Name() string { return p.name }
 
 // wire-format structs, kept private since they're OpenAI-specific and
 // never leak outside this file.
@@ -81,7 +96,7 @@ func (p *OpenAIProvider) newRequest(ctx context.Context, body []byte) (*http.Req
 
 func (p *OpenAIProvider) Complete(ctx context.Context, req *models.ChatRequest) (*models.ChatResponse, error) {
 	wireReq := openaiChatRequest{
-		Model:       req.Model,
+		Model:       normalizeModel(req.Model),
 		Messages:    req.Messages,
 		Stream:      false,
 		Temperature: req.Temperature,
@@ -133,7 +148,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *models.ChatRequest) 
 
 func (p *OpenAIProvider) Stream(ctx context.Context, req *models.ChatRequest) (<-chan models.ChatChunk, error) {
 	wireReq := openaiChatRequest{
-		Model:       req.Model,
+		Model:       normalizeModel(req.Model),
 		Messages:    req.Messages,
 		Stream:      true,
 		Temperature: req.Temperature,
@@ -154,8 +169,9 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *models.ChatRequest) (<
 		return nil, fmt.Errorf("openai request failed: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("openai returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s stream: status %d: %s", p.name, resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
 	out := make(chan models.ChatChunk)
@@ -222,4 +238,11 @@ func (p *OpenAIProvider) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("openai health check returned status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// normalizeModel strips routing prefixes that infera adds for demo purposes
+// before the model name is sent to the upstream API.
+// e.g. "demo-gpt-4o-mini" → "gpt-4o-mini"
+func normalizeModel(model string) string {
+	return strings.TrimPrefix(model, "demo-")
 }
